@@ -1,0 +1,124 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+model User {
+  id            String    @id
+  name          String
+  email         String
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  playgrounds   Playground[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+enum PlaygroundStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+model Playground {
+  id          String           @id @default(cuid())
+  slug        String           @unique
+  title       String?
+  status      PlaygroundStatus @default(DRAFT)
+  entryFile   String           @default("index.html")
+  totalBytes  Int              @default(0)
+  publishedAt DateTime?
+  ownerId     String
+  owner       User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  files       PlaygroundFile[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([ownerId, status])
+  @@map("playground")
+}
+
+model Blob {
+  checksum   String   @id @db.Char(64)   // sha256 hex
+  size       Int
+  storageKey String   @unique            // e.g. "blobs/ab/abcd…"
+  createdAt  DateTime @default(now())
+  files      PlaygroundFile[]
+  @@map("blob")
+}
+
+model PlaygroundFile {
+  id           String     @id @default(cuid())
+  playgroundId String
+  playground   Playground @relation(fields: [playgroundId], references: [id], onDelete: Cascade)
+  path         String
+  contentType  String     // stays per-file: same bytes can be .txt or .html
+  blobChecksum String
+  blob         Blob       @relation(fields: [blobChecksum], references: [checksum], onDelete: Restrict)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([playgroundId, path])
+  @@index([blobChecksum])            // needed for "is this blob still referenced?" GC
+  @@map("playground_file")
+}
