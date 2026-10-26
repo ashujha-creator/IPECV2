@@ -18,7 +18,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { auth } from "@/lib/auth"; // adjust to your better-auth export
 import { prisma } from "@/lib/prisma"; // adjust to your Prisma client singleton
-import { supabaseAdmin } from "@/lib/supabase-admin";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 // ───────────────────────── limits & allowlists ─────────────────────────
 
@@ -276,177 +276,178 @@ async function publish(
   if (new Set(assetMeta.map((a) => a.id)).size !== assetMeta.length) {
     throw new HttpError(400, "Duplicate asset ids.");
   }
-
-  // assetMeta[i] describes assets[i]; FormData preserves append order.
-  const assetFiles = form
-    .getAll("assets")
-    .filter((entry): entry is File => entry instanceof File);
-
-  if (assetFiles.length !== assetMeta.length) {
-    throw new HttpError(
-      400,
-      "assetMeta does not match the number of uploaded files.",
-    );
-  }
-
-  // 3. build the final file set -------------------------------------------
-  const files: PreparedFile[] = [];
-  const usedPaths = new Set(["index.html", "style.css", "script.js"]);
-  const pathById = new Map<string, string>();
-
-  for (let i = 0; i < assetFiles.length; i++) {
-    const file = assetFiles[i];
-    const meta = assetMeta[i];
-
-    if (file.size > MAX_ASSET_BYTES) {
-      throw new HttpError(413, `"${meta.name}" is larger than 5 MB.`);
-    }
-    const safe = toSafeAssetName(meta.name);
-    if (!safe) {
-      throw new HttpError(400, `"${meta.name}" is not a supported file type.`);
-    }
-
-    const path = uniquePath(safe.base, safe.ext, usedPaths);
-    const data = Buffer.from(await file.arrayBuffer());
-    pathById.set(meta.id, path);
-    files.push({
-      path,
-      contentType: ASSET_TYPES[safe.ext],
-      data,
-      checksum: sha256(data),
-    });
-  }
-
-  const unresolved = new Set<string>();
-  const rewrite = (source: string) =>
-    rewriteAssetRefs(normalizeNewlines(source), pathById, unresolved);
-
-  const codeFiles = [
-    {
-      path: "index.html",
-      contentType: "text/html",
-      text: buildIndexHtml(
-        rewrite(htmlSource),
-        playground.title ?? "Playground",
-      ),
-    },
-    { path: "style.css", contentType: "text/css", text: rewrite(cssSource) },
-    {
-      path: "script.js",
-      contentType: "text/javascript",
-      text: rewrite(jsSource),
-    },
-  ];
-
-  if (unresolved.size > 0) {
-    throw new HttpError(
-      400,
-      "Your code references assets that weren't uploaded. Remove or re-add them and try again.",
-    );
-  }
-
-  for (const code of codeFiles) {
-    const data = Buffer.from(code.text, "utf-8");
-    if (data.length > MAX_CODE_BYTES) {
-      throw new HttpError(413, `${code.path} is larger than 1 MB.`);
-    }
-    files.push({
-      path: code.path,
-      contentType: code.contentType,
-      data,
-      checksum: sha256(data),
-    });
-  }
-
-  // Measured on the final bytes (after wrapping/rewriting), not the raw form fields.
-  const totalBytes = files.reduce((sum, f) => sum + f.data.length, 0);
-  if (totalBytes > MAX_TOTAL_BYTES) {
-    throw new HttpError(
-      413,
-      "Total size exceeds the playground's 50 MB limit.",
-    );
-  }
-
-  // 4. upload only what Storage doesn't have yet ----------------------------
-  const uniqueByChecksum = new Map(files.map((f) => [f.checksum, f]));
-
-  const known = new Set(
-    (
-      await prisma.blob.findMany({
-        where: { checksum: { in: [...uniqueByChecksum.keys()] } },
-        select: { checksum: true },
-      })
-    ).map((b) => b.checksum),
+  console.log(
+    "Form data parsed successfully. Proceeding with file processing...",
+    form,
   );
+  // // assetMeta[i] describes assets[i]; FormData preserves append order.
+  // const assetFiles = form
+  //   .getAll("assets")
+  //   .filter((entry): entry is File => entry instanceof File);
 
-  const toUpload = [...uniqueByChecksum.values()].filter(
-    (f) => !known.has(f.checksum),
-  );
+  // if (assetFiles.length !== assetMeta.length) {
+  //   throw new HttpError(
+  //     400,
+  //     "assetMeta does not match the number of uploaded files.",
+  //   );
+  // }
 
-  await mapLimit(toUpload, UPLOAD_CONCURRENCY, async (file) => {
-    const { error } = await supabaseAdmin.storage
-      .from(BUCKET)
-      .upload(blobKey(file.checksum), file.data, {
-        contentType: file.contentType,
-        cacheControl: "31536000", // key is the content hash, so the bytes never change
-        upsert: true, // same key == same bytes, so a concurrent duplicate is harmless
-      });
+  // // 3. build the final file set -------------------------------------------
+  // const files: PreparedFile[] = [];
+  // const usedPaths = new Set(["index.html", "style.css", "script.js"]);
+  // const pathById = new Map<string, string>();
 
-    if (error) {
-      console.error("[publish] storage upload failed", file.path, error);
-      throw new HttpError(502, "Failed to upload files to storage.");
-    }
-  });
+  // for (let i = 0; i < assetFiles.length; i++) {
+  //   const file = assetFiles[i];
+  //   const meta = assetMeta[i];
 
-  // 5. one transaction: blobs, file rows, playground state -------------------
-  const now = new Date();
+  //   if (file.size > MAX_ASSET_BYTES) {
+  //     throw new HttpError(413, `"${meta.name}" is larger than 5 MB.`);
+  //   }
+  //   const safe = toSafeAssetName(meta.name);
+  //   if (!safe) {
+  //     throw new HttpError(400, `"${meta.name}" is not a supported file type.`);
+  //   }
 
-  await prisma.$transaction(
-    async (tx) => {
-      // Serialise concurrent publishes of the same playground.
-      await tx.$queryRaw`SELECT id FROM "playground" WHERE id = ${playground.id} FOR UPDATE`;
+  //   const path = uniquePath(safe.base, safe.ext, usedPaths);
+  //   const data = Buffer.from(await file.arrayBuffer());
+  //   pathById.set(meta.id, path);
+  //   files.push({
+  //     path,
+  //     contentType: ASSET_TYPES[safe.ext],
+  //     data,
+  //     checksum: sha256(data),
+  //   });
+  // }
 
-      await tx.blob.createMany({
-        data: [...uniqueByChecksum.values()].map((f) => ({
-          checksum: f.checksum,
-          size: f.data.length,
-          storageKey: blobKey(f.checksum),
-        })),
-        skipDuplicates: true,
-      });
+  // const unresolved = new Set<string>();
+  // const rewrite = (source: string) =>
+  //   rewriteAssetRefs(normalizeNewlines(source), pathById, unresolved);
 
-      // Replace-all inside the transaction: readers see the old set until commit,
-      // then the new set. Removed assets disappear without any diffing logic.
-      await tx.playgroundFile.deleteMany({
-        where: { playgroundId: playground.id },
-      });
-      await tx.playgroundFile.createMany({
-        data: files.map((f) => ({
-          playgroundId: playground.id,
-          path: f.path,
-          contentType: f.contentType,
-          blobChecksum: f.checksum,
-        })),
-      });
+  // const codeFiles = [
+  //   {
+  //     path: "index.html",
+  //     contentType: "text/html",
+  //     text: buildIndexHtml(
+  //       rewrite(htmlSource),
+  //       playground.title ?? "Playground",
+  //     ),
+  //   },
+  //   { path: "style.css", contentType: "text/css", text: rewrite(cssSource) },
+  //   {
+  //     path: "script.js",
+  //     contentType: "text/javascript",
+  //     text: rewrite(jsSource),
+  //   },
+  // ];
 
-      await tx.playground.update({
-        where: { id: playground.id },
-        data: {
-          status: "PUBLISHED",
-          entryFile: "index.html",
-          totalBytes,
-          publishedAt: playground.publishedAt ?? now,
-        },
-      });
-    },
-    { timeout: 15_000 },
-  );
+  // if (unresolved.size > 0) {
+  //   throw new HttpError(
+  //     400,
+  //     "Your code references assets that weren't uploaded. Remove or re-add them and try again.",
+  //   );
+  // }
+
+  // for (const code of codeFiles) {
+  //   const data = Buffer.from(code.text, "utf-8");
+  //   if (data.length > MAX_CODE_BYTES) {
+  //     throw new HttpError(413, `${code.path} is larger than 1 MB.`);
+  //   }
+  //   files.push({
+  //     path: code.path,
+  //     contentType: code.contentType,
+  //     data,
+  //     checksum: sha256(data),
+  //   });
+  // }
+
+  // // Measured on the final bytes (after wrapping/rewriting), not the raw form fields.
+  // const totalBytes = files.reduce((sum, f) => sum + f.data.length, 0);
+  // if (totalBytes > MAX_TOTAL_BYTES) {
+  //   throw new HttpError(
+  //     413,
+  //     "Total size exceeds the playground's 50 MB limit.",
+  //   );
+  // }
+
+  // // 4. upload only what Storage doesn't have yet ----------------------------
+  // const uniqueByChecksum = new Map(files.map((f) => [f.checksum, f]));
+
+  // const known = new Set(
+  //   (
+  //     await prisma.blob.findMany({
+  //       where: { checksum: { in: [...uniqueByChecksum.keys()] } },
+  //       select: { checksum: true },
+  //     })
+  //   ).map((b) => b.checksum),
+  // );
+
+  // const toUpload = [...uniqueByChecksum.values()].filter(
+  //   (f) => !known.has(f.checksum),
+  // );
+
+  // await mapLimit(toUpload, UPLOAD_CONCURRENCY, async (file) => {
+  //   const { error } = await supabaseAdmin.storage
+  //     .from(BUCKET)
+  //     .upload(blobKey(file.checksum), file.data, {
+  //       contentType: file.contentType,
+  //       cacheControl: "31536000", // key is the content hash, so the bytes never change
+  //       upsert: true, // same key == same bytes, so a concurrent duplicate is harmless
+  //     });
+
+  //   if (error) {
+  //     console.error("[publish] storage upload failed", file.path, error);
+  //     throw new HttpError(502, "Failed to upload files to storage.");
+  //   }
+  // });
+
+  // // 5. one transaction: blobs, file rows, playground state -------------------
+  // const now = new Date();
+
+  // await prisma.$transaction(
+  //   async (tx) => {
+  //     // Serialise concurrent publishes of the same playground.
+  //     await tx.$queryRaw`SELECT id FROM "playground" WHERE id = ${playground.id} FOR UPDATE`;
+
+  //     await tx.blob.createMany({
+  //       data: [...uniqueByChecksum.values()].map((f) => ({
+  //         checksum: f.checksum,
+  //         size: f.data.length,
+  //         storageKey: blobKey(f.checksum),
+  //       })),
+  //       skipDuplicates: true,
+  //     });
+
+  //     // Replace-all inside the transaction: readers see the old set until commit,
+  //     // then the new set. Removed assets disappear without any diffing logic.
+  //     await tx.playgroundFile.deleteMany({
+  //       where: { playgroundId: playground.id },
+  //     });
+  //     await tx.playgroundFile.createMany({
+  //       data: files.map((f) => ({
+  //         playgroundId: playground.id,
+  //         path: f.path,
+  //         contentType: f.contentType,
+  //         blobChecksum: f.checksum,
+  //       })),
+  //     });
+
+  //     await tx.playground.update({
+  //       where: { id: playground.id },
+  //       data: {
+  //         status: "PUBLISHED",
+  //         entryFile: "index.html",
+  //         totalBytes,
+  //         publishedAt: playground.publishedAt ?? now,
+  //       },
+  //     });
+  //   },
+  //   { timeout: 15_000 },
+  // );
   revalidateTag(playgroundTag(playground.slug), { expire: 0 });
   return NextResponse.json(
     {
       success: "Playground published successfully.",
-      files: files.length,
-      totalBytes,
     },
     { status: 200 },
   );

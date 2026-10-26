@@ -1,103 +1,92 @@
-// app/render/[slug]/[[...path]]/route.ts
+// app/render/[slug]/[...path]/route.ts
 //
-// Serves a published playground's files, one request per file:
-//   /render/<slug>/index.html   -> the document
-//   /render/<slug>/style.css    -> resolved by the browser from the <link> in index.html
-//   /render/<slug>/assets/x.png -> same
+// Serves one published file per request, e.g. /render/my-site/index.html,
+// /render/my-site/style.css, /render/my-site/assets/logo.png.
+// The public page embeds /render/<slug>/<entryFile> in a sandboxed iframe, so the browser
+// resolves every relative URL in the user's HTML against this route on its own.
 //
-// Why it works: every stored file is addressed by (playground, path). The browser asks
-// for each path separately, so nothing is stitched together by hand and one file's bytes
-// can never be served as another's. The bytes are also re-hashed and compared with the
-// stored checksum, so a wrong or corrupted object fails loudly instead of rendering.
+// Caching model: the *URL* is stable but the *content* changes on every publish, so the
+// browser revalidates with an ETag (the storage key contains the publishId, so it changes
+// on every publish). Unchanged files answer 304 without touching Storage.
 
-import { NextRequest, NextResponse } from "next/server";
-import crypto from "node:crypto";
-import { prisma } from "@/lib/prisma";
-import { supabaseAdmin } from "@/lib/supabase-admin";
-import { RENDER_SANDBOX } from "@/lib/render-sandbox";
+import { cacheLife, cacheTag } from "next/cache";
+import { prisma } from "@/lib/prisma"; // adjust to your Prisma client singleton
+import { playgroundTag } from "@/lib/playground-cache";
+import { PLAYGROUND_CONFIG } from "@/lib/playground/config";
+import { RENDER_SANDBOX } from "@/lib/render-sandbox"; // e.g. "allow-scripts allow-forms allow-popups"
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-const BUCKET = "page-media";
+type Ctx = { params: Promise<{ slug: string; path: string[] }> };
 
-type Ctx = { params: Promise<{ slug: string; path?: string[] }> };
+/**
+ * One cache entry per slug (at most ~53 rows), invalidated by the publish route's
+ * revalidateTag. Looking paths up in memory means random URLs can't create cache entries.
+ */
+async function getPublishedFiles(slug: string) {
+  "use cache";
+  cacheTag(playgroundTag(slug));
+  cacheLife("hours");
 
-const isTextType = (contentType: string) =>
-  contentType.startsWith("text/") || contentType === "application/json";
-
-export async function GET(request: NextRequest, { params }: Ctx) {
-  const { slug, path: segments } = await params;
-  const path = (segments ?? []).join("/");
-
-  // /render/<slug> (no file) -> redirect to the entry file. Serving the document at
-  // /render/<slug>/index.html keeps relative URLs ("style.css") resolving correctly,
-  // with no <base> tag and no dependence on trailing-slash behaviour.
-  if (!path) {
-    const playground = await prisma.playground.findFirst({
-      where: { slug, status: "PUBLISHED" },
-      select: { entryFile: true },
-    });
-    if (!playground) return new NextResponse("Not found", { status: 404 });
-    return NextResponse.redirect(
-      new URL(`/render/${slug}/${playground.entryFile}`, request.url),
-      308,
-    );
-  }
-
-  // One query: the file, its blob, and a check that the playground is published.
-  const file = await prisma.playgroundFile.findFirst({
-    where: { path, playground: { slug, status: "PUBLISHED" } },
-    select: {
-      contentType: true,
-      blob: { select: { checksum: true, storageKey: true } },
-    },
+  return prisma.playgroundFile.findMany({
+    where: { playground: { slug, status: "PUBLISHED" } },
+    select: { path: true, storageKey: true, contentType: true },
   });
-  if (!file) return new NextResponse("Not found", { status: 404 });
+}
 
-  const etag = `"${file.blob.checksum}"`;
+/** If-None-Match can be a list, and CDNs sometimes weaken validators (W/"…"). */
+function matchesEtag(header: string | null, etag: string) {
+  if (!header) return false;
+  return header
+    .split(",")
+    .map((token) => token.trim().replace(/^W\//, ""))
+    .some((token) => token === "*" || token === etag);
+}
 
-  const headers: Record<string, string> = {
-    "Content-Type": isTextType(file.contentType)
-      ? `${file.contentType}; charset=utf-8`
-      : file.contentType,
+const notFound = () =>
+  new Response("Not found", {
+    status: 404,
+    headers: { "Cache-Control": "no-store" },
+  });
+
+export async function GET(request: Request, { params }: Ctx) {
+  const { slug, path } = await params;
+
+  const files = await getPublishedFiles(slug);
+  const filePath = path.join("/");
+  const file = files.find((f) => f.path === filePath);
+  // Unknown slug, draft/archived playground, or unknown path: all look the same.
+  if (!file) return notFound();
+
+  const etag = `"${file.storageKey}"`;
+  const contentType = file.contentType.startsWith("text/")
+    ? `${file.contentType}; charset=utf-8`
+    : file.contentType;
+
+  const headers = {
+    "Content-Type": contentType, // from the DB (derived from the extension), never sniffed
     ETag: etag,
-    // Browsers revalidate (cheap 304); a CDN may serve it for a minute after a republish.
-    "Cache-Control":
-      "public, max-age=0, s-maxage=60, stale-while-revalidate=300",
-    "X-Content-Type-Options": "nosniff",
-    // User code runs with an opaque origin: no cookies, no access to this app.
-    // Keep the flags identical to the iframe's sandbox attribute (see lib/render-sandbox.ts).
+    "Cache-Control": "public, max-age=0, must-revalidate",
+    // Same sandbox as the iframe attribute, so opening a file URL directly is just as isolated.
     "Content-Security-Policy": `sandbox ${RENDER_SANDBOX}`,
-    // A sandboxed frame has a "null" origin, so its fetch() calls and web fonts
-    // need CORS to read these (public) files.
+    "X-Content-Type-Options": "nosniff",
+    // Sandboxed pages have an opaque origin: fonts and fetch() need CORS to load.
     "Access-Control-Allow-Origin": "*",
+    // Index the public page, not the raw files.
+    "X-Robots-Tag": "noindex",
   };
 
-  // Conditional request: skip Storage entirely when the browser's copy is current.
-  if (request.headers.get("if-none-match") === etag) {
-    return new NextResponse(null, { status: 304, headers });
+  if (matchesEtag(request.headers.get("if-none-match"), etag)) {
+    return new Response(null, { status: 304, headers });
   }
 
   const { data, error } = await supabaseAdmin.storage
-    .from(BUCKET)
-    .download(file.blob.storageKey);
+    .from(PLAYGROUND_CONFIG.bucket)
+    .download(file.storageKey);
 
   if (error || !data) {
-    console.error("[render] download failed", file.blob.storageKey, error);
-    return new NextResponse("Storage error", { status: 502 });
+    console.error("[render] storage download failed", file.storageKey, error);
+    return notFound();
   }
 
-  const bytes = Buffer.from(await data.arrayBuffer());
-
-  const actual = crypto.createHash("sha256").update(bytes).digest("hex");
-  if (actual !== file.blob.checksum) {
-    console.error("[render] checksum mismatch", {
-      slug,
-      path,
-      storageKey: file.blob.storageKey,
-      expected: file.blob.checksum,
-      actual,
-    });
-    return new NextResponse("Stored file is corrupted", { status: 500 });
-  }
-
-  return new NextResponse(new Uint8Array(bytes), { status: 200, headers });
+  return new Response(data.stream(), { headers });
 }

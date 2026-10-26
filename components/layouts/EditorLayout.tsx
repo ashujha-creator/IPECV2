@@ -36,6 +36,8 @@ console.log("Hello from JavaScript");
 `,
 };
 import PublishDialog from "./publish-dialog";
+import { publishPlayground } from "@/lib/playground/publish-client";
+import { supabase } from "@/lib/supabase-browser";
 
 export default function EditorLayout() {
   const [activeFile, setActiveFile] = useState<FileType>("html");
@@ -209,36 +211,20 @@ export default function EditorLayout() {
     setUploadError(null);
 
     try {
-      const formData = new FormData();
-      formData.append("html", files.html);
-      formData.append("css", files.css);
-      formData.append("javascript", files.javascript);
-      formData.append(
-        "assetMeta",
-        JSON.stringify(
-          assets.map((asset) => ({ id: asset.id, name: asset.name })),
-        ),
-      );
-
-      for (const asset of assets) {
-        formData.append("assets", asset.file, asset.name);
-      }
-
-      const response = await fetch(`/api/playgrounds/${site.id}/publish`, {
-        method: "POST",
-        body: formData,
+      await publishPlayground({
+        supabase,
+        playgroundId: site.id,
+        html: files.html,
+        css: files.css,
+        javascript: files.javascript,
+        assets: assets.map(({ id, name, file }) => ({ id, name, file })),
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        setUploadError(data.error ?? "Failed to upload.");
-        return;
-      }
-
       setLastPublishedAt(new Date());
-    } catch {
-      setUploadError("Failed to upload.");
+    } catch (error) {
+      setUploadError(
+        error instanceof Error ? error.message : "Failed to upload.",
+      );
     } finally {
       setIsUploading(false);
     }

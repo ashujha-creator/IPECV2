@@ -98,27 +98,16 @@ model Playground {
   @@map("playground")
 }
 
-model Blob {
-  checksum   String   @id @db.Char(64)   // sha256 hex
-  size       Int
-  storageKey String   @unique            // e.g. "blobs/ab/abcd…"
-  createdAt  DateTime @default(now())
-  files      PlaygroundFile[]
-  @@map("blob")
-}
-
 model PlaygroundFile {
   id           String     @id @default(cuid())
   playgroundId String
   playground   Playground @relation(fields: [playgroundId], references: [id], onDelete: Cascade)
   path         String
-  contentType  String     // stays per-file: same bytes can be .txt or .html
-  blobChecksum String
-  blob         Blob       @relation(fields: [blobChecksum], references: [checksum], onDelete: Restrict)
+  contentType  String     // derived from the extension
+  storageKey   String     // playgrounds/<playgroundId>/<publishId>/<path>
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
   @@unique([playgroundId, path])
-  @@index([blobChecksum])            // needed for "is this blob still referenced?" GC
   @@map("playground_file")
 }
