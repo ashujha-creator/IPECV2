@@ -111,3 +111,24 @@ model PlaygroundFile {
   @@unique([playgroundId, path])
   @@map("playground_file")
 }
+
+model MenuItem {
+  id        String     @id @default(cuid())
+  label     String
+  url       String     @default("#")
+  icon      String?    @default("Folder")
+  badge     String?
+  target    String     @default("_self") // _self or _blank
+  isVisible Boolean    @default(true)
+  order     Int        @default(0)
+
+  // Self-referencing recursive relations
+  parentId  String?
+  parent    MenuItem?  @relation("MenuHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  MenuItem[] @relation("MenuHierarchy")
+
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([parentId])
+}

@@ -1,12 +1,16 @@
 import React from "react";
 import Link from "next/link";
-import { FolderPlus, Folders, Edit, Trash2 } from "lucide-react";
-
+import { FolderPlus, Folders, Edit, Trash2, LinkIcon } from "lucide-react";
+import { prisma } from "@/lib/prisma"; // Adjust to your actual Prisma client singleton
+import { unstable_cache } from "next/cache";
 // Mock server-side fetch or state (replace with your DB call)
-async function getProjectsCount() {
-  // Example: const count = await db.project.count();
-  return 12; // Total count placeholder
-}
+const getProjectsCount = unstable_cache(
+  async () => {
+    return await prisma.playground.count();
+  },
+  ["projects-count"], // Cache key
+  { revalidate: 60 }, // Revalidate every 60 seconds
+);
 
 export default async function ProjectsDashboardPage() {
   const totalProjects = await getProjectsCount();
@@ -16,7 +20,7 @@ export default async function ProjectsDashboardPage() {
       title: "View All Projects",
       description:
         "Browse, filter, and inspect all existing projects in your workspace.",
-      href: "/projects/all",
+      href: "/dashboard/projects/all",
       icon: Folders,
       color: "bg-blue-50 text-blue-600 border-blue-100 hover:border-blue-300",
       buttonText: "Go to Projects List",
@@ -35,7 +39,7 @@ export default async function ProjectsDashboardPage() {
       title: "Update Project",
       description:
         "Modify existing project details, statuses, and configurations.",
-      href: "/projects/edit",
+      href: "/dashboard/projects/edit",
       icon: Edit,
       color:
         "bg-amber-50 text-amber-600 border-amber-100 hover:border-amber-300",
@@ -45,10 +49,18 @@ export default async function ProjectsDashboardPage() {
       title: "Delete Project",
       description:
         "Manage project removals and archive or permanently delete projects.",
-      href: "/projects/delete",
+      href: "/dashboard/projects/delete",
       icon: Trash2,
       color: "bg-rose-50 text-rose-600 border-rose-100 hover:border-rose-300",
       buttonText: "Manage Deletions",
+    },
+    {
+      title: "Link Project",
+      description: "Creates links and sub-links for projects.",
+      href: "/dashboard/projects/links",
+      icon: LinkIcon,
+      color: "bg-rose-50 text-rose-600 border-rose-100 hover:border-rose-300",
+      buttonText: "Manage Links",
     },
   ];
 
