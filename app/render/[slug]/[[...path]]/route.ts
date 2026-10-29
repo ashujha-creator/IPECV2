@@ -16,7 +16,12 @@ import { PLAYGROUND_CONFIG } from "@/lib/playground/config";
 import { RENDER_SANDBOX } from "@/lib/render-sandbox"; // e.g. "allow-scripts allow-forms allow-popups"
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-type Ctx = { params: Promise<{ slug: string; path: string[] }> };
+type Ctx = {
+  params: Promise<{
+    slug: string;
+    path?: string[];
+  }>;
+};
 
 /**
  * One cache entry per slug (at most ~53 rows), invalidated by the publish route's
@@ -49,10 +54,10 @@ const notFound = () =>
   });
 
 export async function GET(request: Request, { params }: Ctx) {
-  const { slug, path } = await params;
+  const { slug, path = [] } = await params;
 
   const files = await getPublishedFiles(slug);
-  const filePath = path.join("/");
+  const filePath = path.length === 0 ? "index.html" : path.join("/");
   const file = files.find((f) => f.path === filePath);
   // Unknown slug, draft/archived playground, or unknown path: all look the same.
   if (!file) return notFound();
