@@ -347,10 +347,6 @@ export default function Footer({
           />
         </a>
       )}
-      <h3 className="text-center text-[13.5px] text-white/70 pb-4">
-        &copy; {new Date().getFullYear()} Inderprastha Engineering College. All
-        rights reserved. Made with ❤️ by Ashu Jha.
-      </h3>
     </footer>
   );
 }

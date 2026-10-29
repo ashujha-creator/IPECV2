@@ -1,23 +1,59 @@
+// app/dashboard/projects/links/page.tsx
+import type { Metadata } from "next";
+import { connection } from "next/server";
 import { Suspense } from "react";
-import MenuWrapper from "@/components/MenuBuilder/MenuWrapper";
+import { getNavMenu } from "@/lib/nav-menu/queries";
+import { NavBuilder } from "@/components/MenuBuilder/nav-builder";
 
-export default function MenusAdminPage() {
+export const metadata: Metadata = {
+  title: "Navigation menu",
+};
+
+/**
+ * Reads the saved menu. With Cache Components enabled, request-time data must
+ * be read inside a <Suspense> boundary: the page shell (heading, skeleton) is
+ * prerendered and this part streams in on every request.
+ */
+async function BuilderLoader() {
+  // Opt into request-time rendering so the database is read per request,
+  // not once at build time.
+  await connection();
+
+  // null means no menu has been saved yet: the builder shows the templates.
+  const snapshot = await getNavMenu();
+
+  return <NavBuilder initialSnapshot={snapshot} />;
+}
+
+function BuilderSkeleton() {
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 py-10 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-4xl mx-auto space-y-8">
-        <header className="text-center space-y-2">
-          <h1 className="text-3xl font-extrabold tracking-tight text-white sm:text-4xl">
-            Dynamic Recursive Menu Builder
-          </h1>
-          <p className="text-slate-400 text-sm max-w-xl mx-auto">
-            Manage website navigation headers, submenus, and child categories stored directly in your database.
-          </p>
-        </header>
-
-        <Suspense fallback={<div className="text-center py-12 text-slate-500">Loading menu configuration...</div>}>
-          <MenuWrapper />
-        </Suspense>
+    <div role="status" className="space-y-4">
+      <span className="sr-only">Loading the menu builder…</span>
+      <div className="h-[58px] animate-pulse rounded-xl border bg-muted/50 motion-reduce:animate-none" />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="h-96 animate-pulse rounded-xl border bg-muted/50 motion-reduce:animate-none" />
+        <div className="h-96 animate-pulse rounded-xl border bg-muted/50 motion-reduce:animate-none" />
       </div>
-    </main>
+    </div>
+  );
+}
+
+export default function LinksPage() {
+  return (
+    <div className="mx-auto w-full max-w-7xl space-y-6 p-4 md:p-6">
+      <header className="space-y-1">
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Navigation menu
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Build the menu your site&apos;s navbar will render. Saving stores it
+          in the database as JSON.
+        </p>
+      </header>
+
+      <Suspense fallback={<BuilderSkeleton />}>
+        <BuilderLoader />
+      </Suspense>
+    </div>
   );
 }

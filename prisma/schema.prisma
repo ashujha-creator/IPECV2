@@ -132,3 +132,24 @@ model MenuItem {
 
   @@index([parentId])
 }
+
+
+//
+// APPEND this model to the bottom of your existing schema.prisma.
+// It does not modify or relate to any existing model.
+
+/// The global navigation menu. One row per menu `key`; the app uses a single
+/// row with key "main". `content` holds the versioned JSON envelope:
+/// { "schemaVersion": 1, "items": [ ...NavNode ] }
+model NavMenu {
+  id        String   @id @default(cuid())
+  key       String   @unique @default("main")
+  content   Json
+  /// Incremented on every save. Used for optimistic concurrency so two
+  /// browser tabs can't silently overwrite each other.
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("nav_menu")
+}
